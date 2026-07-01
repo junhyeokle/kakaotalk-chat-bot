@@ -46,6 +46,7 @@ src/
     configStore.ts       per-room enabled flag, aliases, persona, long-term
                           summary + message counter, spontaneous-reply cooldown
     participantStore.ts  per-room, per-userId participant profiles
+    roomProfileStore.ts  named pre-analyzed room profiles (vibe/rating/topics/persona)
   llm/
     types.ts             LlmProvider interface
     gemini.ts            Gemini implementation
@@ -56,6 +57,7 @@ src/
     defaultPersona.ts    default persona system prompt
     promptBuilder.ts     persona + room summary + participants + history -> LLM context
     summarizer.ts        folds recent history into the room summary + participant profiles
+    exportAnalyzer.ts     analyzes an exported chat file into vibe/rating/topics/persona
   bot/
     triggerEngine.ts     direct-mention detection (name/@name/alias)
     contextJudge.ts       asks the LLM whether to jump in unprompted, and for the reply
@@ -66,6 +68,10 @@ src/
     setPersona.ts        CLI: set a room-specific persona override
     setAliases.ts         CLI: set room-specific mention aliases/nicknames
     listRooms.ts          CLI: inspect what the bot remembers per room
+    listChannels.ts       CLI: list joined rooms (name + chatId)
+    analyzeExport.ts      CLI: analyze an exported chat .txt into a named room profile
+    linkProfile.ts         CLI: apply a named room profile to a real room by chatId
+    lib/parseKakaoExport.ts  parser for KakaoTalk's "export chat" .txt format
 ```
 
 ## Prerequisites
@@ -203,6 +209,57 @@ npm run set-aliases -- <chatId> 길동,길동이,길동봇
 Sets the room-specific mention aliases (comma-separated, overwrites the full
 list). Useful when people call the bot by a nickname or shortened name instead
 of its full `KAKAO_BOT_NAME`.
+
+## Pre-analyzing a room before the bot joins
+
+If you export a room's past conversation from KakaoTalk before the bot is ever
+added to it, you can have the LLM figure out that room's vibe, content rating,
+and common topics ahead of time, and turn that into a ready-made persona — so
+the bot fits in immediately instead of starting from the generic default
+persona and slowly building up memory from scratch.
+
+This is a **three-step, fully manual** process on purpose: the exported file
+only has a room *title*, not KakaoTalk's internal `chatId`, and titles can
+collide or change. Rather than guessing which live room a profile belongs to,
+you explicitly link them — so the bot can never mistake one room for another.
+
+1. **Export the chat** from KakaoTalk (PC app: room settings → "대화 내보내기"),
+   which gives you a `.txt` file.
+
+2. **Analyze it** and save the result under a name you choose (`profileId`):
+
+   ```bash
+   npm run analyze-export -- ~/Downloads/우리방_카톡대화.txt friends-room [샘플개수]
+   ```
+
+   This parses the export (`src/scripts/lib/parseKakaoExport.ts`), takes the
+   most recent `샘플개수` messages (default 800 — recent messages reflect the
+   room's *current* vibe better than the whole history, and keeps the LLM call
+   cheap), and asks the LLM to produce a vibe description, a content-rating
+   note, a topic list, and a ready-to-use persona prompt
+   (`src/persona/exportAnalyzer.ts`). The result is saved to
+   `roomProfiles/{profileId}` in Firestore — not yet applied to any live room.
+
+3. **Find the real room's `chatId`** once the bot has joined it:
+
+   ```bash
+   npm run list-channels
+   ```
+
+4. **Link the profile to that room:**
+
+   ```bash
+   npm run link-profile -- <chatId> friends-room
+   ```
+
+   This sets the room's `personaOverride` to the generated persona and seeds
+   its `summary` with the vibe/rating/topics — the same fields the live
+   `summarizer.ts` keeps refreshing afterward, so the pre-analysis is just the
+   *starting point*; ongoing conversation keeps updating it from there.
+
+A room the bot joins **without** ever being linked to a profile just behaves
+normally: default persona, empty summary that builds up from scratch as
+described above. Linking is opt-in per room.
 
 ## Running 24/7 on a VPS
 

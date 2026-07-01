@@ -44,6 +44,14 @@ export class KakaoClient {
     this.client.on('chat', listener);
   }
 
+  /** Lists every channel (room) this account is currently joined to. */
+  listJoinedChannels(): { channelId: string; name: string }[] {
+    return Array.from(this.client.channelList.all()).map((channel) => ({
+      channelId: channel.channelId.toString(),
+      name: channel.getDisplayName(),
+    }));
+  }
+
   isSelf(data: TalkChatData): boolean {
     return this.client.isClientUser(data.chat.sender);
   }
