@@ -1,10 +1,10 @@
 import { db } from './admin';
-import { config } from '../config';
 
 export interface RoomConfig {
   enabled: boolean;
-  engagementProbability: number;
   personaOverride?: string;
+  /** Extra names/nicknames that also count as a direct mention in this room. */
+  aliases: string[];
 }
 
 function roomConfigDoc(chatId: string) {
@@ -22,12 +22,11 @@ export async function getRoomConfig(chatId: string): Promise<RoomConfig> {
 
   return {
     enabled: typeof data.enabled === 'boolean' ? data.enabled : true,
-    engagementProbability:
-      typeof data.engagementProbability === 'number'
-        ? data.engagementProbability
-        : config.engagementProbability,
     personaOverride:
       typeof data.personaOverride === 'string' ? data.personaOverride : undefined,
+    aliases: Array.isArray(data.aliases)
+      ? data.aliases.filter((a): a is string => typeof a === 'string')
+      : [],
   };
 }
 
@@ -61,18 +60,7 @@ export async function getRoomMemory(chatId: string): Promise<RoomMemory> {
  * decide when enough new messages have accumulated to refresh the summary.
  */
 export async function incrementMessageCounter(chatId: string): Promise<number> {
-  const doc = roomConfigDoc(chatId);
-  const db = doc.firestore;
-  return db.runTransaction(async (tx) => {
-    const snapshot = await tx.get(doc);
-    const current =
-      snapshot.exists && typeof snapshot.data()?.messagesSinceSummary === 'number'
-        ? (snapshot.data()!.messagesSinceSummary as number)
-        : 0;
-    const next = current + 1;
-    tx.set(doc, { messagesSinceSummary: next }, { merge: true });
-    return next;
-  });
+  return incrementCounterField(chatId, 'messagesSinceSummary');
 }
 
 /** Saves a freshly generated summary and resets the message counter. */
@@ -81,4 +69,34 @@ export async function saveRoomSummary(chatId: string, summary: string): Promise<
     { summary, messagesSinceSummary: 0 },
     { merge: true },
   );
+}
+
+/**
+ * Increments the count of messages seen since the bot last spoke up on its
+ * own (i.e. not because it was mentioned), and returns the new value. Used
+ * to gate how often the bot is even allowed to *consider* jumping into the
+ * conversation unprompted, so it doesn't ask the LLM "should I reply?" on
+ * every single message.
+ */
+export async function incrementSpontaneousCooldown(chatId: string): Promise<number> {
+  return incrementCounterField(chatId, 'messagesSinceSpontaneousReply');
+}
+
+/** Resets the spontaneous-reply cooldown, e.g. right after the bot has spoken. */
+export async function resetSpontaneousCooldown(chatId: string): Promise<void> {
+  await roomConfigDoc(chatId).set({ messagesSinceSpontaneousReply: 0 }, { merge: true });
+}
+
+async function incrementCounterField(chatId: string, field: string): Promise<number> {
+  const doc = roomConfigDoc(chatId);
+  return db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(doc);
+    const current =
+      snapshot.exists && typeof snapshot.data()?.[field] === 'number'
+        ? (snapshot.data()![field] as number)
+        : 0;
+    const next = current + 1;
+    tx.set(doc, { [field]: next }, { merge: true });
+    return next;
+  });
 }

@@ -7,6 +7,7 @@
     "dev": "ts-node src/index.ts",
     "login": "ts-node src/scripts/login.ts",
     "set-persona": "ts-node src/scripts/setPersona.ts",
+    "set-aliases": "ts-node src/scripts/setAliases.ts",
     "list-rooms": "ts-node src/scripts/listRooms.ts",
     "build": "tsc",
     "start": "node dist/index.js",

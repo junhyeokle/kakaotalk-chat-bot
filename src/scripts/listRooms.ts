@@ -20,9 +20,10 @@ async function main(): Promise<void> {
 
     console.log(`\n--- room ${chatId} ---`);
     console.log(`enabled: ${data.enabled ?? true}`);
-    console.log(`engagementProbability: ${data.engagementProbability ?? '(default)'}`);
+    console.log(`aliases: ${Array.isArray(data.aliases) && data.aliases.length ? data.aliases.join(', ') : '(none)'}`);
     console.log(`personaOverride: ${data.personaOverride ? data.personaOverride : '(default persona)'}`);
     console.log(`messagesSinceSummary: ${data.messagesSinceSummary ?? 0}`);
+    console.log(`messagesSinceSpontaneousReply: ${data.messagesSinceSpontaneousReply ?? 0}`);
     console.log(`summary: ${data.summary ? data.summary : '(none yet)'}`);
     console.log(`participants (${participants.length}):`);
     for (const p of participants) {

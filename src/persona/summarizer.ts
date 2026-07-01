@@ -1,4 +1,5 @@
 import { LlmProvider } from '../llm/types';
+import { tryParseJson } from '../llm/jsonUtil';
 import { StoredMessage } from '../firebase/memoryStore';
 import { Participant, ParticipantUpdate } from '../firebase/participantStore';
 
@@ -43,21 +44,13 @@ function renderPreviousParticipants(participants: Participant[]): string {
   return participants.map((p) => `- ${p.nickname}: ${p.profile}`).join('\n');
 }
 
-function stripCodeFence(raw: string): string {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  return (fenced ? fenced[1] : raw).trim();
-}
-
 function parseResult(raw: string): SummaryResult {
-  const cleaned = stripCodeFence(raw);
-  let parsed: RawSummaryResult;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
+  const parsed = tryParseJson<RawSummaryResult>(raw);
+  if (!parsed) {
     // Model didn't return valid JSON — fall back to treating the whole
     // response as the room summary with no participant updates, rather than
     // losing the memory update entirely.
-    return { summary: cleaned, participants: [] };
+    return { summary: raw.trim(), participants: [] };
   }
 
   const summary = typeof parsed.summary === 'string' ? parsed.summary : '';

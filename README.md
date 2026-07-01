@@ -24,10 +24,12 @@ conversation memory and configuration in Firebase Firestore.
    for messages.
 3. For each incoming message the bot: logs it to Firestore → refreshes the room's
    long-term summary and per-participant profiles if enough new messages have
-   accumulated → decides whether to respond (always if its name is mentioned,
-   otherwise a configurable random chance) → builds an LLM prompt from the
-   persona + room summary + participant profiles + recent room history →
-   generates a reply → waits a human-like typing delay → sends → logs the reply.
+   accumulated → checks if it was directly mentioned (name, `@name`, or a
+   configured alias/nickname) → if mentioned, always replies; otherwise, once
+   the spontaneous-reply cooldown has elapsed, asks the LLM itself to judge
+   whether jumping into the conversation right now is natural given the
+   context (and if so, generate the reply, in the same call) → waits a
+   human-like typing delay → sends → logs the reply.
 
 ## Project structure
 
@@ -41,25 +43,28 @@ src/
   firebase/
     admin.ts             firebase-admin init from service account
     memoryStore.ts       per-room recent message history (capped at 20)
-    configStore.ts       per-room enabled flag, engagement probability, persona,
-                          long-term summary + message counter
+    configStore.ts       per-room enabled flag, aliases, persona, long-term
+                          summary + message counter, spontaneous-reply cooldown
     participantStore.ts  per-room, per-userId participant profiles
   llm/
     types.ts             LlmProvider interface
     gemini.ts            Gemini implementation
     openai.ts            OpenAI implementation
     index.ts             factory selecting provider via LLM_PROVIDER
+    jsonUtil.ts           tolerant JSON parsing for structured LLM responses
   persona/
     defaultPersona.ts    default persona system prompt
     promptBuilder.ts     persona + room summary + participants + history -> LLM context
     summarizer.ts        folds recent history into the room summary + participant profiles
   bot/
-    triggerEngine.ts     mention/probabilistic engagement decision
+    triggerEngine.ts     direct-mention detection (name/@name/alias)
+    contextJudge.ts       asks the LLM whether to jump in unprompted, and for the reply
     humanize.ts          typing delay + optional message splitting
     messageHandler.ts    end-to-end incoming-message pipeline
   scripts/
     login.ts             interactive one-time login script
     setPersona.ts        CLI: set a room-specific persona override
+    setAliases.ts         CLI: set room-specific mention aliases/nicknames
     listRooms.ts          CLI: inspect what the bot remembers per room
 ```
 
@@ -93,7 +98,7 @@ src/
    | `GEMINI_API_KEY` | required if `LLM_PROVIDER=gemini` |
    | `OPENAI_API_KEY` | required if `LLM_PROVIDER=openai` |
    | `KAKAO_BOT_NAME` | the name the bot responds to when mentioned |
-   | `ENGAGEMENT_PROBABILITY` | default chance (0–1) of replying when not mentioned (e.g. `0.15`) |
+   | `SPONTANEOUS_COOLDOWN_MESSAGES` | messages that must pass since the bot last spoke unprompted before it's even allowed to consider jumping in again (default `6`) |
    | `FIREBASE_SERVICE_ACCOUNT_PATH` | path to your Firebase service account JSON |
    | `SUMMARY_UPDATE_INTERVAL` | messages per room before the long-term summary is refreshed (default `30`) |
 
@@ -130,11 +135,14 @@ npm start
 Room settings live in Firestore under `rooms/{channelId}`:
 
 - `enabled` (boolean) — turn the bot off for a room without stopping the process.
-- `engagementProbability` (number) — override the default random reply chance.
+- `aliases` (string[]) — extra names/nicknames that count as a direct mention in
+  this room, on top of `KAKAO_BOT_NAME`.
 - `personaOverride` (string) — replace the default persona prompt for that room.
 - `summary` (string) — the room's rolling long-term memory, auto-generated.
 - `messagesSinceSummary` (number) — internal counter, resets each time `summary`
   is refreshed.
+- `messagesSinceSpontaneousReply` (number) — internal counter, resets whenever the
+  bot replies (mentioned or not); gates the spontaneous-reply cooldown.
 
 Messages are stored under `rooms/{channelId}/messages` and capped at the 20 most
 recent (this is the short-term window fed to the LLM verbatim). Once
@@ -142,6 +150,27 @@ recent (this is the short-term window fed to the LLM verbatim). Once
 to fold them into `summary` **and** into per-participant profiles — this is what
 lets the bot "remember" things (who's who, running jokes, past events) well beyond
 the 20-message short-term window.
+
+### How the bot decides whether to reply
+
+1. **Direct mention → always replies.** A message counts as a mention if it
+   contains `KAKAO_BOT_NAME`, `@KAKAO_BOT_NAME`, or any of the room's `aliases` as
+   a substring — this naturally also catches Korean vocative forms like "길동아"
+   or "길동아 뭐하냐" as long as "길동" is registered as the name or an alias
+   (see `src/bot/triggerEngine.ts`).
+2. **Otherwise → cooldown-gated LLM judgment.** The bot doesn't call the LLM on
+   every single message (too slow/expensive and too eager). It only *considers*
+   replying once `SPONTANEOUS_COOLDOWN_MESSAGES` messages have passed since it
+   last spoke. Once that threshold is met, every subsequent message asks the LLM,
+   in a single call, to judge whether jumping in right now fits the conversation
+   — and if so, produce the reply — using the same persona + long-term summary +
+   participant profiles + recent history context as a normal reply (see
+   `src/bot/contextJudge.ts`). If the LLM says no, nothing is sent and the
+   cooldown does *not* reset, so it keeps getting asked on later messages until it
+   finds a natural moment to jump in.
+3. **Any successful reply resets the cooldown**, whether it came from a mention
+   or the spontaneous judgment, so the bot doesn't immediately try to speak again
+   right after it just did.
 
 ### Per-participant memory (within a room)
 
@@ -167,6 +196,13 @@ npm run set-persona -- <chatId> "이 방에서만 쓸 페르소나 텍스트"
 Overrides the persona for one specific room (e.g. give the bot a different
 character per group chat). Persists to Firestore immediately; takes effect on
 the room's next message.
+
+```bash
+npm run set-aliases -- <chatId> 길동,길동이,길동봇
+```
+Sets the room-specific mention aliases (comma-separated, overwrites the full
+list). Useful when people call the bot by a nickname or shortened name instead
+of its full `KAKAO_BOT_NAME`.
 
 ## Running 24/7 on a VPS
 

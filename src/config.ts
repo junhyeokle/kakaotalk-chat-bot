@@ -9,7 +9,7 @@ export interface AppConfig {
   geminiApiKey: string;
   openaiApiKey: string;
   kakaoBotName: string;
-  engagementProbability: number;
+  spontaneousCooldownMessages: number;
   firebaseServiceAccountPath: string;
   summaryUpdateInterval: number;
 }
@@ -18,15 +18,6 @@ function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value || value.trim() === '') {
     throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-function parseProbability(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const value = Number(raw);
-  if (Number.isNaN(value) || value < 0 || value > 1) {
-    throw new Error(`ENGAGEMENT_PROBABILITY must be a number between 0 and 1, got: ${raw}`);
   }
   return value;
 }
@@ -59,7 +50,11 @@ function loadConfig(): AppConfig {
     geminiApiKey,
     openaiApiKey,
     kakaoBotName: requireEnv('KAKAO_BOT_NAME'),
-    engagementProbability: parseProbability(process.env.ENGAGEMENT_PROBABILITY, 0.15),
+    spontaneousCooldownMessages: parsePositiveInt(
+      process.env.SPONTANEOUS_COOLDOWN_MESSAGES,
+      6,
+      'SPONTANEOUS_COOLDOWN_MESSAGES',
+    ),
     firebaseServiceAccountPath: requireEnv('FIREBASE_SERVICE_ACCOUNT_PATH'),
     summaryUpdateInterval: parsePositiveInt(
       process.env.SUMMARY_UPDATE_INTERVAL,

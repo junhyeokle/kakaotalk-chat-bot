@@ -1,29 +1,14 @@
-import { config } from '../config';
-
-export interface TriggerDecision {
-  respond: boolean;
-  reason: 'mentioned' | 'probabilistic' | 'skipped';
-}
-
 /**
- * Decides whether the bot should reply to a message.
+ * Detects a direct mention of the bot: its configured name, an "@name" tag,
+ * or a Korean vocative form ("길동아", "길동아 뭐하냐") — the latter is just a
+ * substring match on the base name/alias, since the vocative particle (아/야)
+ * is appended directly with no space.
  *
- * If the message references the bot's name it always responds (direct address).
- * Otherwise it engages randomly at the room's configured probability so the bot
- * chimes in occasionally instead of on every message.
+ * Also checks any room-specific aliases/nicknames the bot is known by in
+ * that particular group chat.
  */
-export function decideTrigger(
-  text: string,
-  engagementProbability: number,
-): TriggerDecision {
-  const name = config.kakaoBotName.trim();
-  if (name && text.toLowerCase().includes(name.toLowerCase())) {
-    return { respond: true, reason: 'mentioned' };
-  }
-
-  if (Math.random() < engagementProbability) {
-    return { respond: true, reason: 'probabilistic' };
-  }
-
-  return { respond: false, reason: 'skipped' };
+export function detectMention(text: string, botName: string, aliases: string[]): boolean {
+  const lowerText = text.toLowerCase();
+  const names = [botName, ...aliases].map((n) => n.trim().toLowerCase()).filter(Boolean);
+  return names.some((name) => lowerText.includes(name));
 }
