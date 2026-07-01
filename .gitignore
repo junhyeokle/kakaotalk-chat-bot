@@ -1,0 +1,17 @@
+node_modules/
+dist/
+
+# Environment / secrets
+.env
+firebase-service-account.json
+
+# Persisted KakaoTalk login session/device credentials — must never be committed
+# (they grant access to a real account)
+.kakao-session.json
+
+# Misc
+*.log
+.DS_Store
+
+# OMC tooling runtime state
+.omc/

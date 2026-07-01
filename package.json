@@ -1,0 +1,30 @@
+{
+  "name": "kakaotalk-chat-bot",
+  "version": "1.0.0",
+  "description": "KakaoTalk group-chat AI bot that replies like a human friend using an LLM, with conversation memory in Firestore.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "login": "ts-node src/scripts/login.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop kakaotalk-bot",
+    "pm2:restart": "pm2 restart kakaotalk-bot",
+    "pm2:logs": "pm2 logs kakaotalk-bot"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "dotenv": "^16.4.5",
+    "firebase-admin": "^12.7.0",
+    "node-kakao": "^4.1.9",
+    "openai": "^4.73.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
