@@ -17,7 +17,12 @@ function initFirebase(): admin.firestore.Firestore {
       credential: admin.credential.cert(serviceAccount),
     });
   }
-  return admin.firestore();
+  // Bot messages have no senderId, so writes naturally include undefined
+  // fields (e.g. StoredMessage.senderId) — let Firestore drop them instead
+  // of throwing.
+  const firestore = admin.firestore();
+  firestore.settings({ ignoreUndefinedProperties: true });
+  return firestore;
 }
 
 export const db = initFirebase();

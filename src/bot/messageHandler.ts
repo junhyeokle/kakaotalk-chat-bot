@@ -12,9 +12,10 @@ import {
   incrementMessageCounter,
   saveRoomSummary,
 } from '../firebase/configStore';
+import { getAllParticipants, saveParticipantProfiles } from '../firebase/participantStore';
 import { decideTrigger } from './triggerEngine';
 import { buildPromptContext } from '../persona/promptBuilder';
-import { summarizeRoom } from '../persona/summarizer';
+import { summarizeRoom, resolveParticipantUpdates } from '../persona/summarizer';
 import { getLlmProvider } from '../llm';
 import { sendHumanized } from './humanize';
 
@@ -36,16 +37,18 @@ export async function handleMessage(
 
   const chatId = channel.channelId.toString();
   const senderName = data.getSenderInfo(channel)?.nickname ?? 'unknown';
+  const senderId = data.chat.sender.userId.toString();
 
   await appendMessage(chatId, {
     sender: senderName,
+    senderId,
     text,
     isBot: false,
     timestamp: nowTimestamp(),
   });
 
   // Long-term memory upkeep runs independently of whether the bot replies to
-  // this particular message, so the room summary stays current either way.
+  // this particular message, so room/participant memory stays current either way.
   await refreshSummaryIfDue(chatId);
 
   const roomConfig = await getRoomConfig(chatId);
@@ -54,11 +57,17 @@ export async function handleMessage(
   const decision = decideTrigger(text, roomConfig.engagementProbability);
   if (!decision.respond) return;
 
-  const [history, memory] = await Promise.all([
+  const [history, memory, participants] = await Promise.all([
     getRecentMessages(chatId),
     getRoomMemory(chatId),
+    getAllParticipants(chatId),
   ]);
-  const context = buildPromptContext(history, roomConfig.personaOverride, memory.summary);
+  const context = buildPromptContext(
+    history,
+    roomConfig.personaOverride,
+    memory.summary,
+    participants,
+  );
 
   const reply = (await getLlmProvider().generateReply(context)).trim();
   if (!reply) return;
@@ -75,18 +84,21 @@ export async function handleMessage(
 
 /**
  * Bumps the room's message counter and, once it reaches the configured
- * interval, folds the recent history into the room's rolling summary so
- * long-term context survives beyond the capped short-term history window.
+ * interval, folds the recent history into the room's rolling summary and
+ * per-participant profiles so long-term memory survives beyond the capped
+ * short-term history window.
  */
 async function refreshSummaryIfDue(chatId: string): Promise<void> {
   const count = await incrementMessageCounter(chatId);
   if (count < config.summaryUpdateInterval) return;
 
-  const [history, memory] = await Promise.all([
+  const [history, memory, participants] = await Promise.all([
     getRecentMessages(chatId),
     getRoomMemory(chatId),
+    getAllParticipants(chatId),
   ]);
 
-  const summary = await summarizeRoom(getLlmProvider(), memory.summary, history);
-  await saveRoomSummary(chatId, summary);
+  const result = await summarizeRoom(getLlmProvider(), memory.summary, participants, history);
+  await saveRoomSummary(chatId, result.summary);
+  await saveParticipantProfiles(chatId, resolveParticipantUpdates(result, history));
 }

@@ -23,11 +23,11 @@ conversation memory and configuration in Firebase Firestore.
 2. **Run:** `npm run dev` reuses the saved session to reconnect and starts listening
    for messages.
 3. For each incoming message the bot: logs it to Firestore → refreshes the room's
-   long-term summary if enough new messages have accumulated → decides whether to
-   respond (always if its name is mentioned, otherwise a configurable random
-   chance) → builds an LLM prompt from the persona + room summary + recent
-   room history → generates a reply → waits a human-like typing delay → sends →
-   logs the reply.
+   long-term summary and per-participant profiles if enough new messages have
+   accumulated → decides whether to respond (always if its name is mentioned,
+   otherwise a configurable random chance) → builds an LLM prompt from the
+   persona + room summary + participant profiles + recent room history →
+   generates a reply → waits a human-like typing delay → sends → logs the reply.
 
 ## Project structure
 
@@ -43,6 +43,7 @@ src/
     memoryStore.ts       per-room recent message history (capped at 20)
     configStore.ts       per-room enabled flag, engagement probability, persona,
                           long-term summary + message counter
+    participantStore.ts  per-room, per-userId participant profiles
   llm/
     types.ts             LlmProvider interface
     gemini.ts            Gemini implementation
@@ -50,14 +51,16 @@ src/
     index.ts             factory selecting provider via LLM_PROVIDER
   persona/
     defaultPersona.ts    default persona system prompt
-    promptBuilder.ts     persona + room summary + history + message -> LLM context
-    summarizer.ts         folds recent history into the room's rolling long-term summary
+    promptBuilder.ts     persona + room summary + participants + history -> LLM context
+    summarizer.ts        folds recent history into the room summary + participant profiles
   bot/
     triggerEngine.ts     mention/probabilistic engagement decision
     humanize.ts          typing delay + optional message splitting
     messageHandler.ts    end-to-end incoming-message pipeline
   scripts/
     login.ts             interactive one-time login script
+    setPersona.ts        CLI: set a room-specific persona override
+    listRooms.ts          CLI: inspect what the bot remembers per room
 ```
 
 ## Prerequisites
@@ -136,8 +139,34 @@ Room settings live in Firestore under `rooms/{channelId}`:
 Messages are stored under `rooms/{channelId}/messages` and capped at the 20 most
 recent (this is the short-term window fed to the LLM verbatim). Once
 `SUMMARY_UPDATE_INTERVAL` new messages accumulate in a room, the bot asks the LLM
-to fold them into `summary` — this is what lets the bot "remember" things (who's
-who, running jokes, past events) well beyond the 20-message short-term window.
+to fold them into `summary` **and** into per-participant profiles — this is what
+lets the bot "remember" things (who's who, running jokes, past events) well beyond
+the 20-message short-term window.
+
+### Per-participant memory (within a room)
+
+Each room also has a `rooms/{channelId}/participants/{userId}` sub-collection.
+Every time the summary refreshes, the LLM is asked "who showed up in this batch of
+messages, and what do we now know about them" (personality, interests, running
+jokes, relationships to others in the room) and the result is merged in, keyed by
+the sender's stable KakaoTalk `userId` (not their nickname, since that can
+change). This is scoped **per room** — the same person in two different rooms
+gets two independent profiles.
+
+### Inspecting and configuring memory from the CLI
+
+```bash
+npm run list-rooms
+```
+Prints every room the bot has seen: its config, current summary, and the full
+list of participant profiles. Use this to find a room's `chatId`.
+
+```bash
+npm run set-persona -- <chatId> "이 방에서만 쓸 페르소나 텍스트"
+```
+Overrides the persona for one specific room (e.g. give the bot a different
+character per group chat). Persists to Firestore immediately; takes effect on
+the room's next message.
 
 ## Running 24/7 on a VPS
 

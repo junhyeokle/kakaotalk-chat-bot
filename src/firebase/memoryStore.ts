@@ -2,6 +2,8 @@ import { db, admin } from './admin';
 
 export interface StoredMessage {
   sender: string;
+  /** Stable per-account id, absent for the bot's own messages. */
+  senderId?: string;
   text: string;
   isBot: boolean;
   timestamp: number;
