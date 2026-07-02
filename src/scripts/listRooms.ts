@@ -23,8 +23,17 @@ async function main(): Promise<void> {
     console.log(`aliases: ${Array.isArray(data.aliases) && data.aliases.length ? data.aliases.join(', ') : '(none)'}`);
     console.log(`personaOverride: ${data.personaOverride ? data.personaOverride : '(default persona)'}`);
     console.log(`guardrails: ${data.guardrails ? data.guardrails : '(none)'}`);
+    if (Array.isArray(data.fillerPhrases) && data.fillerPhrases.length) {
+      console.log('fillerPhrases:');
+      for (const f of data.fillerPhrases) {
+        console.log(`  ${f.phrase} (${f.frequency}) — ${f.context}`);
+      }
+    } else {
+      console.log('fillerPhrases: (default)');
+    }
     console.log(`messagesSinceSummary: ${data.messagesSinceSummary ?? 0}`);
     console.log(`messagesSinceSpontaneousReply: ${data.messagesSinceSpontaneousReply ?? 0}`);
+    console.log(`messagesSinceFillerReply: ${data.messagesSinceFillerReply ?? 0}`);
     console.log(`summary: ${data.summary ? data.summary : '(none yet)'}`);
     console.log(`participants (${participants.length}):`);
     for (const p of participants) {

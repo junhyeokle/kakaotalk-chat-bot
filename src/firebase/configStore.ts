@@ -1,4 +1,5 @@
 import { db } from './admin';
+import { FillerPhrase } from '../persona/fillerPhrases';
 
 export interface RoomConfig {
   enabled: boolean;
@@ -11,6 +12,15 @@ export interface RoomConfig {
    * so rewriting the persona's tone doesn't accidentally drop the room's rules.
    */
   guardrails?: string;
+  /**
+   * Low-effort "filler" reactions (ㅋㅋㅋ, 인정, etc.) this room's bot is
+   * allowed to send, each tagged with when it actually fits so the judge
+   * doesn't fire one out of context (e.g. "인정" only for agreement, not for
+   * something funny). Undefined means fall back to DEFAULT_FILLER_PHRASES.
+   * Kept as an explicit whitelist (not free-form LLM generation) so a
+   * casual/coarse phrase allowed in one room can never leak into another.
+   */
+  fillerPhrases?: FillerPhrase[];
 }
 
 function roomConfigDoc(chatId: string) {
@@ -34,6 +44,16 @@ export async function getRoomConfig(chatId: string): Promise<RoomConfig> {
       ? data.aliases.filter((a): a is string => typeof a === 'string')
       : [],
     guardrails: typeof data.guardrails === 'string' ? data.guardrails : undefined,
+    fillerPhrases: Array.isArray(data.fillerPhrases)
+      ? data.fillerPhrases.filter(
+          (p): p is FillerPhrase =>
+            typeof p === 'object' &&
+            p !== null &&
+            typeof (p as FillerPhrase).phrase === 'string' &&
+            typeof (p as FillerPhrase).context === 'string' &&
+            ['high', 'medium', 'low'].includes((p as FillerPhrase).frequency),
+        )
+      : undefined,
   };
 }
 
@@ -79,19 +99,35 @@ export async function saveRoomSummary(chatId: string, summary: string): Promise<
 }
 
 /**
- * Increments the count of messages seen since the bot last spoke up on its
- * own (i.e. not because it was mentioned), and returns the new value. Used
- * to gate how often the bot is even allowed to *consider* jumping into the
- * conversation unprompted, so it doesn't ask the LLM "should I reply?" on
- * every single message.
+ * Increments the count of messages seen since the bot last gave a real,
+ * meaningful spontaneous reply (i.e. not because it was mentioned, and not
+ * just a filler reaction), and returns the new value. Used to gate how often
+ * the bot is even allowed to *consider* jumping in with an actual reply
+ * unprompted, so it doesn't ask the LLM "should I reply?" on every message.
  */
 export async function incrementSpontaneousCooldown(chatId: string): Promise<number> {
   return incrementCounterField(chatId, 'messagesSinceSpontaneousReply');
 }
 
-/** Resets the spontaneous-reply cooldown, e.g. right after the bot has spoken. */
+/** Resets the meaningful-reply cooldown, e.g. right after the bot has spoken. */
 export async function resetSpontaneousCooldown(chatId: string): Promise<void> {
   await roomConfigDoc(chatId).set({ messagesSinceSpontaneousReply: 0 }, { merge: true });
+}
+
+/**
+ * Same idea as the spontaneous-reply cooldown, but for cheap filler
+ * reactions (ㅋㅋㅋ, 인정, ...). Tracked independently and with its own,
+ * much shorter threshold, because real people send these far more often
+ * than an actual reply — and sending one shouldn't block or be blocked by
+ * the meaningful-reply cadence.
+ */
+export async function incrementFillerCooldown(chatId: string): Promise<number> {
+  return incrementCounterField(chatId, 'messagesSinceFillerReply');
+}
+
+/** Resets the filler-reaction cooldown, e.g. right after the bot sends one. */
+export async function resetFillerCooldown(chatId: string): Promise<void> {
+  await roomConfigDoc(chatId).set({ messagesSinceFillerReply: 0 }, { merge: true });
 }
 
 async function incrementCounterField(chatId: string, field: string): Promise<number> {

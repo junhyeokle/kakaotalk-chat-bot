@@ -13,11 +13,14 @@ import {
   saveRoomSummary,
   incrementSpontaneousCooldown,
   resetSpontaneousCooldown,
+  incrementFillerCooldown,
+  resetFillerCooldown,
 } from '../firebase/configStore';
 import { getAllParticipants, saveParticipantProfiles } from '../firebase/participantStore';
 import { detectMention } from './triggerEngine';
 import { judgeAndMaybeReply } from './contextJudge';
 import { buildPromptContext } from '../persona/promptBuilder';
+import { DEFAULT_FILLER_PHRASES } from '../persona/fillerPhrases';
 import { summarizeRoom, resolveParticipantUpdates } from '../persona/summarizer';
 import { getLlmProvider } from '../llm';
 import { sendHumanized } from './humanize';
@@ -25,10 +28,11 @@ import { sendHumanized } from './humanize';
 /**
  * Handles one incoming chat message end to end.
  *
- * Direct mentions always get a reply. Otherwise, once enough messages have
- * passed since the bot last spoke up unprompted (the cooldown), it asks the
- * LLM to judge whether jumping into the conversation right now is natural —
- * and if so, to give the reply in that same call.
+ * Direct mentions always get a real reply. Otherwise, the bot can react in
+ * one of two independent registers: a cheap filler reaction (ㅋㅋㅋ, 인정, ...)
+ * on a short cooldown, or a real spontaneous reply on a longer cooldown —
+ * sending one doesn't reset or block the other, since real people fire off
+ * filler far more often than actual replies.
  */
 export async function handleMessage(
   kakao: KakaoClient,
@@ -62,11 +66,16 @@ export async function handleMessage(
 
   const mentioned = detectMention(text, config.kakaoBotName, roomConfig.aliases);
 
-  // Every message counts toward the spontaneous-reply cooldown, mention or
-  // not — a mention still means the bot just spoke, so it shouldn't also be
-  // eager to jump in again right after.
-  const cooldownCount = await incrementSpontaneousCooldown(chatId);
-  if (!mentioned && cooldownCount < config.spontaneousCooldownMessages) return;
+  // Both cooldowns tick on every message, mention or not.
+  const [meaningfulCooldownCount, fillerCooldownCount] = await Promise.all([
+    incrementSpontaneousCooldown(chatId),
+    incrementFillerCooldown(chatId),
+  ]);
+
+  const meaningfulAllowed = meaningfulCooldownCount >= config.spontaneousCooldownMessages;
+  const fillerAllowed = fillerCooldownCount >= config.fillerCooldownMessages;
+
+  if (!mentioned && !meaningfulAllowed && !fillerAllowed) return;
 
   const [history, memory, participants] = await Promise.all([
     getRecentMessages(chatId),
@@ -82,18 +91,29 @@ export async function handleMessage(
   );
 
   let reply: string;
+  let resetMeaningful = false;
+  let resetFiller = false;
+
   if (mentioned) {
     reply = (await getLlmProvider().generateReply(context)).trim();
+    resetMeaningful = true;
   } else {
-    const judged = await judgeAndMaybeReply(getLlmProvider(), context);
-    if (!judged.respond) return;
+    const judged = await judgeAndMaybeReply(getLlmProvider(), context, {
+      meaningfulAllowed,
+      fillerAllowed,
+      fillerPhrases: roomConfig.fillerPhrases ?? DEFAULT_FILLER_PHRASES,
+    });
+    if (judged.mode === 'none') return;
     reply = judged.reply;
+    resetMeaningful = judged.mode === 'meaningful';
+    resetFiller = judged.mode === 'filler';
   }
 
   if (!reply) return;
 
   await sendHumanized(reply, (chunk) => kakao.sendText(channel, chunk));
-  await resetSpontaneousCooldown(chatId);
+  if (resetMeaningful) await resetSpontaneousCooldown(chatId);
+  if (resetFiller) await resetFillerCooldown(chatId);
 
   await appendMessage(chatId, {
     sender: config.kakaoBotName,

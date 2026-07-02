@@ -10,6 +10,7 @@ export interface AppConfig {
   openaiApiKey: string;
   kakaoBotName: string;
   spontaneousCooldownMessages: number;
+  fillerCooldownMessages: number;
   firebaseServiceAccountPath: string;
   summaryUpdateInterval: number;
 }
@@ -54,6 +55,11 @@ function loadConfig(): AppConfig {
       process.env.SPONTANEOUS_COOLDOWN_MESSAGES,
       6,
       'SPONTANEOUS_COOLDOWN_MESSAGES',
+    ),
+    fillerCooldownMessages: parsePositiveInt(
+      process.env.FILLER_COOLDOWN_MESSAGES,
+      2,
+      'FILLER_COOLDOWN_MESSAGES',
     ),
     firebaseServiceAccountPath: requireEnv('FIREBASE_SERVICE_ACCOUNT_PATH'),
     summaryUpdateInterval: parsePositiveInt(
