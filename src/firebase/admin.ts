@@ -3,7 +3,12 @@ import * as path from 'path';
 import admin from 'firebase-admin';
 import { config } from '../config';
 
-function initFirebase(): admin.firestore.Firestore {
+interface FirebaseHandles {
+  firestore: admin.firestore.Firestore;
+  bucket: ReturnType<admin.storage.Storage['bucket']>;
+}
+
+function initFirebase(): FirebaseHandles {
   if (admin.apps.length === 0) {
     const serviceAccountPath = path.resolve(config.firebaseServiceAccountPath);
     if (!fs.existsSync(serviceAccountPath)) {
@@ -15,6 +20,8 @@ function initFirebase(): admin.firestore.Firestore {
     const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf-8'));
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
+      storageBucket:
+        config.firebaseStorageBucket || `${serviceAccount.project_id}.appspot.com`,
     });
   }
   // Bot messages have no senderId, so writes naturally include undefined
@@ -22,8 +29,10 @@ function initFirebase(): admin.firestore.Firestore {
   // of throwing.
   const firestore = admin.firestore();
   firestore.settings({ ignoreUndefinedProperties: true });
-  return firestore;
+  return { firestore, bucket: admin.storage().bucket() };
 }
 
-export const db = initFirebase();
+const handles = initFirebase();
+export const db = handles.firestore;
+export const bucket = handles.bucket;
 export { admin };

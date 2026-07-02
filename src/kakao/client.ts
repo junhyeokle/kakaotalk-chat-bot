@@ -4,6 +4,7 @@ import {
   TalkChatData,
   OAuthCredential,
   Long,
+  KnownChatType,
 } from 'node-kakao';
 import { SavedSession } from './session';
 
@@ -60,6 +61,14 @@ export class KakaoClient {
     const res = await channel.sendChat(text);
     if (!res.success) {
       throw new Error(`Failed to send chat (status ${res.status})`);
+    }
+  }
+
+  async sendPhoto(channel: TalkChannel, data: Buffer, filename: string): Promise<void> {
+    const ext = filename.split('.').pop() || 'jpg';
+    const res = await channel.sendMedia(KnownChatType.PHOTO, { name: filename, ext, data });
+    if (!res.success) {
+      throw new Error(`Failed to send photo (status ${res.status})`);
     }
   }
 

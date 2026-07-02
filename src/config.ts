@@ -12,11 +12,13 @@ export interface AppConfig {
   spontaneousCooldownMessages: number;
   fillerCooldownMessages: number;
   firebaseServiceAccountPath: string;
+  firebaseStorageBucket: string;
   summaryUpdateInterval: number;
   timeZone: string;
   sleepStartHour: number;
   sleepEndHour: number;
   sleepExtraDelayMs: number;
+  photoCooldownMessages: number;
 }
 
 function requireEnv(name: string): string {
@@ -84,6 +86,9 @@ function loadConfig(): AppConfig {
       'FILLER_COOLDOWN_MESSAGES',
     ),
     firebaseServiceAccountPath: requireEnv('FIREBASE_SERVICE_ACCOUNT_PATH'),
+    // Empty string means "derive from the service account's project_id" —
+    // resolved in firebase/admin.ts where the service account JSON is read.
+    firebaseStorageBucket: process.env.FIREBASE_STORAGE_BUCKET?.trim() ?? '',
     summaryUpdateInterval: parsePositiveInt(
       process.env.SUMMARY_UPDATE_INTERVAL,
       30,
@@ -96,6 +101,11 @@ function loadConfig(): AppConfig {
       process.env.SLEEP_EXTRA_DELAY_MS,
       90000,
       'SLEEP_EXTRA_DELAY_MS',
+    ),
+    photoCooldownMessages: parsePositiveInt(
+      process.env.PHOTO_COOLDOWN_MESSAGES,
+      20,
+      'PHOTO_COOLDOWN_MESSAGES',
     ),
   };
 }

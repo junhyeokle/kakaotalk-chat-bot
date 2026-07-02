@@ -41,6 +41,8 @@ async function main(): Promise<void> {
           : '(global default)'
       }`,
     );
+    console.log(`photoTags: ${Array.isArray(data.photoTags) && data.photoTags.length ? data.photoTags.join(', ') : '(none — photos disabled)'}`);
+    console.log(`messagesSincePhotoReply: ${data.messagesSincePhotoReply ?? 0}`);
     console.log(`summary: ${data.summary ? data.summary : '(none yet)'}`);
     console.log(`participants (${participants.length}):`);
     for (const p of participants) {

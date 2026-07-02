@@ -15,8 +15,11 @@ import {
   resetSpontaneousCooldown,
   incrementFillerCooldown,
   resetFillerCooldown,
+  incrementPhotoCooldown,
+  resetPhotoCooldown,
 } from '../firebase/configStore';
 import { getAllParticipants, saveParticipantProfiles } from '../firebase/participantStore';
+import { getPhoto, listPhotosByTags, downloadPhotoBytes } from '../firebase/photoStore';
 import { extractMessageText } from './messageContent';
 import { detectMention } from './triggerEngine';
 import { judgeAndMaybeReply } from './contextJudge';
@@ -31,10 +34,11 @@ import { sendHumanized, sleep } from './humanize';
  * Handles one incoming chat message end to end.
  *
  * Direct mentions always get a real reply. Otherwise, the bot can react in
- * one of two independent registers: a cheap filler reaction (ㅋㅋㅋ, 인정, ...)
- * on a short cooldown, or a real spontaneous reply on a longer cooldown —
- * sending one doesn't reset or block the other, since real people fire off
- * filler far more often than actual replies.
+ * one of three independent registers: a cheap filler reaction (ㅋㅋㅋ, 인정, ...)
+ * on a short cooldown, a real spontaneous reply on a longer cooldown, or a
+ * photo (if the room is whitelisted for any) on the longest cooldown of all —
+ * sending one never resets or blocks the others, since real people fire off
+ * filler far more often than actual replies, and photos rarer still.
  */
 export async function handleMessage(
   kakao: KakaoClient,
@@ -75,19 +79,30 @@ export async function handleMessage(
     config.timeZone,
   );
 
-  // Both cooldowns tick on every message, mention or not.
-  const [meaningfulCooldownCount, fillerCooldownCount] = await Promise.all([
+  // All three cooldowns tick on every message, mention or not.
+  const [meaningfulCooldownCount, fillerCooldownCount, photoCooldownCount] = await Promise.all([
     incrementSpontaneousCooldown(chatId),
     incrementFillerCooldown(chatId),
+    incrementPhotoCooldown(chatId),
   ]);
+
+  // A room only ever sees photos it's explicitly whitelisted for (see
+  // RoomConfig.photoTags) — an unconfigured room gets no candidates and thus
+  // never has photo as an option, by default.
+  const photoCandidates =
+    !sleeping && roomConfig.photoTags?.length
+      ? await listPhotosByTags(roomConfig.photoTags)
+      : [];
 
   // Asleep: don't even consider jumping in unprompted. A direct mention still
   // gets a reply below (a real person eventually checks their phone), just a
   // much slower one.
   const meaningfulAllowed = !sleeping && meaningfulCooldownCount >= config.spontaneousCooldownMessages;
   const fillerAllowed = !sleeping && fillerCooldownCount >= config.fillerCooldownMessages;
+  const photoAllowed =
+    !sleeping && photoCooldownCount >= config.photoCooldownMessages && photoCandidates.length > 0;
 
-  if (!mentioned && !meaningfulAllowed && !fillerAllowed) return;
+  if (!mentioned && !meaningfulAllowed && !fillerAllowed && !photoAllowed) return;
 
   const [history, memory, participants] = await Promise.all([
     getRecentMessages(chatId),
@@ -102,9 +117,11 @@ export async function handleMessage(
     roomConfig.guardrails,
   );
 
-  let reply: string;
+  let reply = '';
+  let photoId: string | undefined;
   let resetMeaningful = false;
   let resetFiller = false;
+  let resetPhoto = false;
 
   if (mentioned) {
     reply = (await getLlmProvider().generateReply(context)).trim();
@@ -114,14 +131,18 @@ export async function handleMessage(
       meaningfulAllowed,
       fillerAllowed,
       fillerPhrases: roomConfig.fillerPhrases ?? DEFAULT_FILLER_PHRASES,
+      photoAllowed,
+      photoCandidates: photoCandidates.map((p) => ({ id: p.id, description: p.description })),
     });
     if (judged.mode === 'none') return;
     reply = judged.reply;
+    photoId = judged.photoId;
     resetMeaningful = judged.mode === 'meaningful';
     resetFiller = judged.mode === 'filler';
+    resetPhoto = judged.mode === 'photo';
   }
 
-  if (!reply) return;
+  if (!reply && !photoId) return;
 
   // Mentioned while asleep: still reply (ignoring a direct mention entirely
   // would look broken), but with a long extra delay on top of the normal
@@ -129,13 +150,25 @@ export async function handleMessage(
   // while asleep rather than replying instantly.
   if (mentioned && sleeping) await sleep(config.sleepExtraDelayMs);
 
-  await sendHumanized(reply, (chunk) => kakao.sendText(channel, chunk));
+  let loggedText: string;
+  if (photoId) {
+    const photo = await getPhoto(photoId);
+    if (!photo) return; // whitelisted candidate vanished between judge and send — skip rather than crash
+    const bytes = await downloadPhotoBytes(photo.storagePath);
+    await kakao.sendPhoto(channel, bytes, photo.storagePath.split('/').pop() ?? 'photo.jpg');
+    loggedText = `[사진을 보냄: ${photo.description}]`;
+  } else {
+    await sendHumanized(reply, (chunk) => kakao.sendText(channel, chunk));
+    loggedText = reply;
+  }
+
   if (resetMeaningful) await resetSpontaneousCooldown(chatId);
   if (resetFiller) await resetFillerCooldown(chatId);
+  if (resetPhoto) await resetPhotoCooldown(chatId);
 
   await appendMessage(chatId, {
     sender: config.kakaoBotName,
-    text: reply,
+    text: loggedText,
     isBot: true,
     timestamp: nowTimestamp(),
   });

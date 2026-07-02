@@ -48,6 +48,7 @@ src/
     participantStore.ts  per-room, per-userId participant profiles
     roomProfileStore.ts  named pre-analyzed room profiles (vibe/rating/topics/persona)
     personaPresetStore.ts  named, reusable persona presets (persona/guardrails/filler)
+    photoStore.ts           photo catalog (Storage path + tags + description) and tag lookup
   llm/
     types.ts             LlmProvider interface
     gemini.ts            Gemini implementation
@@ -62,7 +63,7 @@ src/
     fillerPhrases.ts       default ㅋㅋㅋ/인정-style filler reaction whitelist
   bot/
     triggerEngine.ts     direct-mention detection (name/@name/alias)
-    contextJudge.ts       asks the LLM to pick none/filler/meaningful, and for the reply
+    contextJudge.ts       asks the LLM to pick none/filler/meaningful/photo, and for the reply
     messageContent.ts      turns stickers/photos into loggable placeholder text
     activityHours.ts        computes whether "now" is within a room's sleep window
     humanize.ts          typing delay w/ jitter + multi-bubble message splitting
@@ -73,6 +74,10 @@ src/
     setAliases.ts         CLI: set room-specific mention aliases/nicknames
     setGuardrails.ts       CLI: set room-specific hard rules/guardrails
     setFillerPhrases.ts    CLI: set room-specific filler-reaction whitelist
+    setSleepHours.ts        CLI: set a room-specific sleep window
+    setPhotoTags.ts          CLI: set a room-specific photo-tag whitelist
+    addPhoto.ts               CLI: upload a photo to the catalog
+    listPhotos.ts              CLI: inspect the photo catalog
     listRooms.ts          CLI: inspect what the bot remembers per room
     listChannels.ts       CLI: list joined rooms (name + chatId)
     analyzeExport.ts      CLI: analyze an exported chat .txt into a named room profile
@@ -86,8 +91,10 @@ src/
 ## Prerequisites
 
 - Node.js 18+
-- A **Firebase project** with Firestore enabled, and a service account JSON key
-  (Project Settings → Service accounts → Generate new private key).
+- A **Firebase project** with Firestore **and Storage** enabled (Storage is
+  only needed if you want the bot to send photos — see "Sending photos"), and
+  a service account JSON key (Project Settings → Service accounts → Generate
+  new private key).
 - An LLM API key: **Gemini** (`GEMINI_API_KEY`) or **OpenAI** (`OPENAI_API_KEY`).
 - A KakaoTalk account (preferably a secondary/test account — see disclaimer).
 
@@ -116,10 +123,12 @@ src/
    | `SPONTANEOUS_COOLDOWN_MESSAGES` | messages that must pass since the bot last gave a real, meaningful spontaneous reply before it's allowed to consider another one (default `6`) |
    | `FILLER_COOLDOWN_MESSAGES` | messages that must pass since the bot last sent a cheap filler reaction (ㅋㅋㅋ, 인정, ...) before it's allowed to consider another one (default `2`) |
    | `FIREBASE_SERVICE_ACCOUNT_PATH` | path to your Firebase service account JSON |
+   | `FIREBASE_STORAGE_BUCKET` | Storage bucket name; leave blank to default to `<project_id>.appspot.com` (only matters if you use photo-sending) |
    | `SUMMARY_UPDATE_INTERVAL` | messages per room before the long-term summary is refreshed (default `30`) |
    | `TIMEZONE` | IANA time zone used to evaluate sleep hours (default `Asia/Seoul`) |
    | `SLEEP_START_HOUR` / `SLEEP_END_HOUR` | global default sleep window, 0–23 (default `2`–`7`); set both to the same value to disable sleep entirely |
    | `SLEEP_EXTRA_DELAY_MS` | extra delay added on top of the normal typing delay when replying to a mention during sleep hours (default `90000` = 1.5 min) |
+   | `PHOTO_COOLDOWN_MESSAGES` | messages that must pass since the bot last sent a photo before it's allowed to consider another one (default `20`) |
 
 3. Place your Firebase service account JSON at the path in
    `FIREBASE_SERVICE_ACCOUNT_PATH` (default `./firebase-service-account.json`).
@@ -183,6 +192,12 @@ Room settings live in Firestore under `rooms/{channelId}`:
 - `sleepStartHour` / `sleepEndHour` (number, 0–23) — per-room override of the
   sleep window; falls back to `SLEEP_START_HOUR`/`SLEEP_END_HOUR` if unset. Set
   both to the same value to keep this specific room always awake.
+- `photoTags` (string[]) — whitelist of photo-catalog tags this room may
+  receive (see "Sending photos" below). Empty/unset means this room never
+  gets a photo, however tagged — there is no global default.
+- `messagesSincePhotoReply` (number) — internal counter, resets only when the
+  bot sends a photo; gates the (typically much longer) photo cooldown,
+  independently of the other two.
 
 Messages are stored under `rooms/{channelId}/messages` and capped at the 20 most
 recent (this is the short-term window fed to the LLM verbatim). Once
@@ -231,34 +246,81 @@ Messages with no literal text aren't ignored outright (`src/bot/messageContent.t
   hallucinate details about a photo it never saw.
 - Other message types (video, file, voice call, etc.) are currently ignored.
 
+### Sending photos
+
+The bot can also send photos it's been given ahead of time — never generated,
+never fetched from the web, only from a pre-uploaded, pre-tagged catalog. The
+model never "sees" a photo either; all it gets is the `description` text you
+wrote for it, so pick descriptions that actually convey what the photo shows
+and when it fits.
+
+1. **Enable Firebase Storage** for your project (Firebase console → Build →
+   Storage) if you haven't already — Firestore alone isn't enough, photo files
+   themselves live in Storage.
+
+2. **Upload a photo and tag it:**
+
+   ```bash
+   npm run add-photo -- ~/Pictures/funny-cat.jpg "웃김,밈" "고양이가 놀라서 점프하는 사진, 빵터질 때 씀"
+   ```
+
+   Uploads the file to Storage under `photos/{uuid}.{ext}` and registers it in
+   `photos/{photoId}` in Firestore with those tags and description.
+
+3. **Whitelist tags for a room:**
+
+   ```bash
+   npm run set-photo-tags -- <chatId> 웃김,밈
+   ```
+
+   A room only ever receives a photo whose tags overlap this list — **by
+   default (unset), a room gets no photos at all**, so a funny meme tagged
+   "웃김" can never land in a room that was never configured to accept that
+   tag. A serious/info-focused room could instead be whitelisted for `정보,진지`
+   tags only, and the two photo pools would never cross.
+
+4. **`npm run list-photos`** to see everything in the catalog and its tags.
+
+Sending is otherwise governed like filler/meaningful replies: gated by its own
+cooldown (`PHOTO_COOLDOWN_MESSAGES`, longest by default since it's the
+rarest/biggest action), asleep rooms never send one, and the LLM only ever
+picks from the exact candidate ids it was offered (see below) — never an
+arbitrary or made-up id.
+
 ### How the bot decides whether to reply
 
 1. **Direct mention → always sends a real reply.** A message counts as a mention
    if it contains `KAKAO_BOT_NAME`, `@KAKAO_BOT_NAME`, or any of the room's
    `aliases` as a substring — this naturally also catches Korean vocative forms
    like "길동아" or "길동아 뭐하냐" as long as "길동" is registered as the name or
-   an alias (see `src/bot/triggerEngine.ts`). This bypasses both cooldowns below.
-2. **Otherwise → two independent cooldown-gated registers.** Real people fill
-   most of a group chat with cheap filler (ㅋㅋㅋ, 인정, ㄹㅇ) and only occasionally
-   send an actual reply, so the bot tracks two separate cooldowns per room:
-   - **Filler** — gated by `FILLER_COOLDOWN_MESSAGES` (short, default `2`).
+   an alias (see `src/bot/triggerEngine.ts`). This bypasses all cooldowns below.
+2. **Otherwise → three independent cooldown-gated registers.** Real people fill
+   most of a group chat with cheap filler (ㅋㅋㅋ, 인정, ㄹㅇ), occasionally send
+   an actual reply, and rarer still, share a photo — so the bot tracks three
+   separate cooldowns per room:
+   - **Filler** — gated by `FILLER_COOLDOWN_MESSAGES` (shortest, default `2`).
    - **Meaningful reply** — gated by `SPONTANEOUS_COOLDOWN_MESSAGES` (longer,
      default `6`).
+   - **Photo** — gated by `PHOTO_COOLDOWN_MESSAGES` (longest, default `20`),
+     and only even possible if the room has a non-empty `photoTags` whitelist
+     with at least one matching photo in the catalog.
 
-   Once *either* cooldown has elapsed, the bot asks the LLM, in a single call,
-   to pick one of the modes that are currently allowed — `none`, `filler`
-   (must echo one of the room's exact whitelisted phrases), or `meaningful`
-   (a real, freely-written reply) — and to produce that reaction in the same
-   call (see `src/bot/contextJudge.ts`). A filler reply that isn't an exact
-   whitelist match is discarded (treated as `none`) rather than let through,
-   so the phrase pool stays under explicit control per room.
+   Once *any* cooldown has elapsed, the bot asks the LLM, in a single call, to
+   pick one of the modes that are currently allowed — `none`, `filler` (must
+   echo one of the room's exact whitelisted phrases), `meaningful` (a real,
+   freely-written reply), or `photo` (must pick one of the room's whitelisted
+   candidate photos by id) — and to produce that reaction in the same call
+   (see `src/bot/contextJudge.ts`). A filler/photo choice that doesn't exactly
+   match an offered candidate is discarded (treated as `none`) rather than let
+   through, so both phrase and photo pools stay under explicit control per room.
 3. **Each register resets only its own cooldown.** Sending a filler reaction
-   resets `messagesSinceFillerReply` but leaves the meaningful-reply cooldown
-   ticking, and vice versa — so a quick "ㅋㅋㅋ" never blocks (or is blocked by)
-   the next real reply, matching how a real person actually chats. A mention
-   reply resets the meaningful-reply cooldown (being addressed directly counts
-   as "the bot just spoke"). If the LLM picks `none`, no cooldown resets, so it
-   keeps getting asked on later messages until it finds a natural moment.
+   resets `messagesSinceFillerReply` but leaves the meaningful-reply and photo
+   cooldowns ticking, and so on for each — so a quick "ㅋㅋㅋ" never blocks (or is
+   blocked by) the next real reply or photo, matching how a real person
+   actually chats. A mention reply resets the meaningful-reply cooldown (being
+   addressed directly counts as "the bot just spoke"). If the LLM picks `none`,
+   no cooldown resets, so it keeps getting asked on later messages until it
+   finds a natural moment.
 
 ### Sending replies as multiple bubbles
 
@@ -508,10 +570,6 @@ they aren't lost between sessions:
   node-kakao) and passing it through a multimodal call, which means extending
   `LlmContext`/`LlmProvider` and both `gemini.ts`/`openai.ts` to carry image
   content — a real scope increase over the current text-only `generateReply`.
-- **Bot-initiated photo sending** — `channel.sendMedia()` exists in node-kakao,
-  so it's technically possible, but needs images stored somewhere (Firebase
-  Storage, not Firestore) plus logic for *when* the bot would decide to send
-  one. Not started.
 - **Rate-limit / retry handling** — if multiple active rooms exhaust the LLM
   provider's RPM/TPM quota, the current code has no retry/backoff; the call
   just fails and that message goes unanswered. Fine for light use, worth

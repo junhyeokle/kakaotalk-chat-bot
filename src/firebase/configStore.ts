@@ -28,6 +28,12 @@ export interface RoomConfig {
    */
   sleepStartHour?: number;
   sleepEndHour?: number;
+  /**
+   * Whitelist of photo tags this room may receive (see photoStore.ts). Empty
+   * or undefined means the room hasn't opted into photo-sending at all — no
+   * photo, however tagged, will ever be sent there by default.
+   */
+  photoTags?: string[];
 }
 
 function roomConfigDoc(chatId: string) {
@@ -63,6 +69,9 @@ export async function getRoomConfig(chatId: string): Promise<RoomConfig> {
       : undefined,
     sleepStartHour: typeof data.sleepStartHour === 'number' ? data.sleepStartHour : undefined,
     sleepEndHour: typeof data.sleepEndHour === 'number' ? data.sleepEndHour : undefined,
+    photoTags: Array.isArray(data.photoTags)
+      ? data.photoTags.filter((t): t is string => typeof t === 'string')
+      : undefined,
   };
 }
 
@@ -137,6 +146,20 @@ export async function incrementFillerCooldown(chatId: string): Promise<number> {
 /** Resets the filler-reaction cooldown, e.g. right after the bot sends one. */
 export async function resetFillerCooldown(chatId: string): Promise<void> {
   await roomConfigDoc(chatId).set({ messagesSinceFillerReply: 0 }, { merge: true });
+}
+
+/**
+ * Same idea again, but for sending a photo — tracked independently with its
+ * own (typically much longer) threshold, since sending an actual image is a
+ * bigger, rarer event than a filler reaction or even a meaningful reply.
+ */
+export async function incrementPhotoCooldown(chatId: string): Promise<number> {
+  return incrementCounterField(chatId, 'messagesSincePhotoReply');
+}
+
+/** Resets the photo-sending cooldown, e.g. right after the bot sends one. */
+export async function resetPhotoCooldown(chatId: string): Promise<void> {
+  await roomConfigDoc(chatId).set({ messagesSincePhotoReply: 0 }, { merge: true });
 }
 
 async function incrementCounterField(chatId: string, field: string): Promise<number> {

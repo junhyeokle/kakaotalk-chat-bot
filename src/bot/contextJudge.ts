@@ -8,7 +8,12 @@ const FREQUENCY_LABEL: Record<FillerFrequency, string> = {
   low: '거의 안 씀 — 정말 어울릴 때만',
 };
 
-export type JudgeMode = 'none' | 'filler' | 'meaningful';
+export type JudgeMode = 'none' | 'filler' | 'meaningful' | 'photo';
+
+export interface PhotoCandidate {
+  id: string;
+  description: string;
+}
 
 export interface JudgeOptions {
   /** Whether a real, substantive reply is allowed right now (cooldown elapsed). */
@@ -17,16 +22,23 @@ export interface JudgeOptions {
   fillerAllowed: boolean;
   /** The whitelist of filler phrases this room may use, each with a usage hint. */
   fillerPhrases: FillerPhrase[];
+  /** Whether sending a photo is allowed right now (cooldown elapsed + room has candidates). */
+  photoAllowed: boolean;
+  /** Photos this room is whitelisted to receive, with a description of each. */
+  photoCandidates: PhotoCandidate[];
 }
 
 interface RawJudgeResult {
   mode?: unknown;
   reply?: unknown;
+  photoId?: unknown;
 }
 
 export interface JudgeResult {
   mode: JudgeMode;
   reply: string;
+  /** Set only when mode === 'photo': the chosen photo's catalog id. */
+  photoId?: string;
 }
 
 function buildInstructions(options: JudgeOptions): string {
@@ -36,6 +48,9 @@ function buildInstructions(options: JudgeOptions): string {
   }
   if (options.meaningfulAllowed) {
     allowedModes.push('"meaningful" (실제 생각을 담은 답장을 새로 작성해서 보냄)');
+  }
+  if (options.photoAllowed) {
+    allowedModes.push('"photo" (아래 사진 목록 중 지금 상황에 맞는 사진 하나를 골라서 보냄)');
   }
 
   const lines = [
@@ -51,6 +66,7 @@ function buildInstructions(options: JudgeOptions): string {
     '- 필러를 고를 땐 아래 목록에서 "지금 상황"에 실제로 맞는 표현만 골라라.',
     '  예: 웃긴 얘기가 아닌데 "ㅋㅋㅋ"를 쓰거나, 동의할 상황이 아닌데 "인정"을 쓰지 마라.',
     '- 네 생각/정보를 보탤 상황이거나 직접적인 화제면 meaningful을 골라라 (허용된 경우에만).',
+    '- 사진 목록에 지금 상황에 정말 잘 맞는 게 있을 때만 photo를 골라라. 어중간하면 쓰지 마라.',
     '- 다른 사람들끼리 이미 활발히 대화 중이고 낄 타이밍이 아니면 none을 골라라.',
   ];
 
@@ -65,10 +81,20 @@ function buildInstructions(options: JudgeOptions): string {
     );
   }
 
+  if (options.photoAllowed) {
+    lines.push('', '[사용 가능한 사진 목록 — "id: 설명"]');
+    for (const p of options.photoCandidates) {
+      lines.push(`- ${p.id}: ${p.description}`);
+    }
+    lines.push('photo를 고를 때는 photoId에 위 id를 정확히 그대로 써라. reply는 빈 문자열로 둬라.');
+  }
+
   lines.push(
     '',
     '아래 JSON 형식으로만 답해라 (다른 텍스트, 코드블록 없이 순수 JSON만):',
-    '{"mode": "none" 또는 "filler" 또는 "meaningful", "reply": "mode가 none이 아닐 때 보낼 텍스트, none이면 빈 문자열"}',
+    '{"mode": "none" 또는 "filler" 또는 "meaningful" 또는 "photo", ' +
+      '"reply": "mode가 filler/meaningful일 때 보낼 텍스트, 그 외엔 빈 문자열", ' +
+      '"photoId": "mode가 photo일 때 고른 사진 id, 그 외엔 빈 문자열"}',
   );
 
   return lines.join('\n');
@@ -77,16 +103,16 @@ function buildInstructions(options: JudgeOptions): string {
 /**
  * Asks the LLM to decide, given the persona/memory/history context, how (if
  * at all) to react to the latest message right now — nothing, a quick filler
- * reaction, or a real reply — and to produce that reaction in the same call.
- * Combining the decision and the content into one call keeps the cost the
- * same as a normal reply (not doubled).
+ * reaction, a real reply, or a photo — and to produce that reaction in the
+ * same call. Combining the decision and the content into one call keeps the
+ * cost the same as a normal reply (not doubled).
  */
 export async function judgeAndMaybeReply(
   llm: LlmProvider,
   baseContext: LlmContext,
   options: JudgeOptions,
 ): Promise<JudgeResult> {
-  if (!options.meaningfulAllowed && !options.fillerAllowed) {
+  if (!options.meaningfulAllowed && !options.fillerAllowed && !options.photoAllowed) {
     return { mode: 'none', reply: '' };
   }
 
@@ -100,7 +126,15 @@ export async function judgeAndMaybeReply(
   if (!parsed) return { mode: 'none', reply: '' };
 
   const reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : '';
-  const mode = parsed.mode === 'filler' ? 'filler' : parsed.mode === 'meaningful' ? 'meaningful' : 'none';
+  const photoId = typeof parsed.photoId === 'string' ? parsed.photoId.trim() : '';
+  const mode =
+    parsed.mode === 'filler'
+      ? 'filler'
+      : parsed.mode === 'meaningful'
+        ? 'meaningful'
+        : parsed.mode === 'photo'
+          ? 'photo'
+          : 'none';
 
   if (mode === 'meaningful' && options.meaningfulAllowed && reply) {
     return { mode: 'meaningful', reply };
@@ -115,6 +149,16 @@ export async function judgeAndMaybeReply(
     options.fillerPhrases.some((f) => f.phrase === reply)
   ) {
     return { mode: 'filler', reply };
+  }
+
+  // Same whitelist principle for photos: the id must match one of the
+  // candidates this room was actually offered.
+  if (
+    mode === 'photo' &&
+    options.photoAllowed &&
+    options.photoCandidates.some((p) => p.id === photoId)
+  ) {
+    return { mode: 'photo', reply: '', photoId };
   }
 
   return { mode: 'none', reply: '' };
