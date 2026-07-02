@@ -64,7 +64,7 @@ src/
     triggerEngine.ts     direct-mention detection (name/@name/alias)
     contextJudge.ts       asks the LLM to pick none/filler/meaningful, and for the reply
     messageContent.ts      turns stickers/photos into loggable placeholder text
-    humanize.ts          typing delay + optional message splitting
+    humanize.ts          typing delay w/ jitter + multi-bubble message splitting
     messageHandler.ts    end-to-end incoming-message pipeline
   scripts/
     login.ts             interactive one-time login script
@@ -230,6 +230,27 @@ Messages with no literal text aren't ignored outright (`src/bot/messageContent.t
    reply resets the meaningful-reply cooldown (being addressed directly counts
    as "the bot just spoke"). If the LLM picks `none`, no cooldown resets, so it
    keeps getting asked on later messages until it finds a natural moment.
+
+### Sending replies as multiple bubbles
+
+A real person rarely sends one grammatically tidy sentence — they send a few
+short bursts instead ("ㅋㅋㅋ" / "그건 좀 아니지 않냐" / "근데 이해는 감"). The
+default persona (`src/persona/defaultPersona.ts`) explicitly tells the model to
+write separate thoughts on separate lines (`\n`) rather than one long sentence,
+and `sendHumanized` (`src/bot/humanize.ts`) turns those lines into individual
+KakaoTalk messages:
+
+- Splits primarily on the model's own line breaks.
+- Any single line still longer than ~60 characters (the model didn't break it
+  up) is further split on sentence punctuation as a fallback.
+- Capped at 5 bubbles per reply — beyond that the tail is merged back into the
+  last bubble rather than spamming the room.
+- Each bubble waits a length-proportional "typing" delay before sending, with
+  ±20% random jitter so the pacing isn't perfectly mechanical.
+
+A `personaOverride` that doesn't mention this convention will just get
+single/long-sentence replies from the LLM — worth carrying the instruction over
+if you're writing a persona from scratch instead of building on the default.
 
 ### Per-participant memory (within a room)
 
@@ -474,10 +495,6 @@ they aren't lost between sessions:
   properly needs a timer/scheduler independent of the message-event loop
   (nothing in the codebase polls on a clock today), not just a bigger
   cooldown.
-- **Multi-message "burst" splitting review** — `humanize.ts` already splits
-  long replies into a few sentence-sized messages, but this hasn't been
-  tuned/reviewed against how a real person actually paces a run of short
-  messages.
 - **Usage/cost monitoring** — no tracking today of how many LLM calls or
   tokens each room is costing, so a very active or many-room deployment could
   run up unexpected spend with no visibility.
