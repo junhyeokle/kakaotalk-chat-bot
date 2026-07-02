@@ -32,7 +32,15 @@ export function buildPromptContext(
     memoryBlocks.push(`[방 참가자들에 대해 기억하고 있는 것]\n${renderParticipants(participants)}`);
   }
 
-  const blocks = [persona, ...memoryBlocks];
+  // Non-text messages (stickers, photos) are logged as bracketed placeholders
+  // like "[이모티콘: 빵터짐]" or "[사진을 보냄]" rather than real text — spell
+  // that convention out so the model doesn't mistake it for literal chat text.
+  const formatNote =
+    '대화 중 "[이모티콘: ...]"나 "[사진을 보냄]" 같은 대괄호 표기는 실제로 그 텍스트가 ' +
+    '전송된 게 아니라, 스티커나 사진이 대신 전송됐다는 뜻이다. 사진의 실제 내용은 너에게 ' +
+    '보이지 않으니 마치 본 것처럼 구체적으로 묘사하지 마라.';
+
+  const blocks = [persona, formatNote, ...memoryBlocks];
 
   // Guardrails go last: instructions near the end of a prompt tend to carry
   // the most weight, and these are hard rules that must survive regardless of

@@ -17,6 +17,7 @@ import {
   resetFillerCooldown,
 } from '../firebase/configStore';
 import { getAllParticipants, saveParticipantProfiles } from '../firebase/participantStore';
+import { extractMessageText } from './messageContent';
 import { detectMention } from './triggerEngine';
 import { judgeAndMaybeReply } from './contextJudge';
 import { buildPromptContext } from '../persona/promptBuilder';
@@ -42,7 +43,7 @@ export async function handleMessage(
   // Never react to our own messages, or we'd loop replying to ourselves.
   if (kakao.isSelf(data)) return;
 
-  const text = data.text?.trim();
+  const text = extractMessageText(data);
   if (!text) return;
 
   const chatId = channel.channelId.toString();

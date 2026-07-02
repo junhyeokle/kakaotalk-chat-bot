@@ -63,6 +63,7 @@ src/
   bot/
     triggerEngine.ts     direct-mention detection (name/@name/alias)
     contextJudge.ts       asks the LLM to pick none/filler/meaningful, and for the reply
+    messageContent.ts      turns stickers/photos into loggable placeholder text
     humanize.ts          typing delay + optional message splitting
     messageHandler.ts    end-to-end incoming-message pipeline
   scripts/
@@ -182,6 +183,24 @@ recent (this is the short-term window fed to the LLM verbatim). Once
 to fold them into `summary` **and** into per-participant profiles — this is what
 lets the bot "remember" things (who's who, running jokes, past events) well beyond
 the 20-message short-term window.
+
+### Stickers and photos
+
+Messages with no literal text aren't ignored outright (`src/bot/messageContent.ts`):
+
+- **Stickers/emoticons** carry a short Kakao-provided description (e.g. "빵터짐")
+  in their attachment data, which is read and logged as `[이모티콘: 빵터짐]` —
+  the bot reacts to that description like any other message (through the same
+  none/filler/meaningful judgment above).
+- **Photos** have no such description. Actually understanding what's in a photo
+  needs vision (downloading the image and passing it to a multimodal LLM call),
+  which **isn't implemented yet** — see "Planned / not yet implemented" below.
+  For now a photo is only logged as `[사진을 보냄]`, so the bot knows one arrived
+  and can react generically (e.g. a filler "오"), but can't describe or respond
+  to its actual content. The persona prompt is explicitly told not to pretend
+  otherwise (`src/persona/promptBuilder.ts`'s `formatNote`), so it doesn't
+  hallucinate details about a photo it never saw.
+- Other message types (video, file, voice call, etc.) are currently ignored.
 
 ### How the bot decides whether to reply
 
@@ -427,6 +446,41 @@ package and something stops compiling, re-check the installed `.d.ts` files (sta
 with `dist/index.d.ts`, `dist/api/auth-api-client.d.ts`, and
 `dist/talk/client/index.d.ts`) and adjust `src/kakao/*` and `src/scripts/login.ts`
 accordingly.
+
+## Planned / not yet implemented
+
+Ideas raised during development that are deliberately deferred, kept here so
+they aren't lost between sessions:
+
+- **Photo vision** — actually understanding what's in a photo (not just
+  acknowledging one arrived). Needs downloading the image
+  (`PhotoAttachment`/`MultiPhotoAttachment` URLs are already available via
+  node-kakao) and passing it through a multimodal call, which means extending
+  `LlmContext`/`LlmProvider` and both `gemini.ts`/`openai.ts` to carry image
+  content — a real scope increase over the current text-only `generateReply`.
+- **Bot-initiated photo sending** — `channel.sendMedia()` exists in node-kakao,
+  so it's technically possible, but needs images stored somewhere (Firebase
+  Storage, not Firestore) plus logic for *when* the bot would decide to send
+  one. Not started.
+- **Rate-limit / retry handling** — if multiple active rooms exhaust the LLM
+  provider's RPM/TPM quota, the current code has no retry/backoff; the call
+  just fails and that message goes unanswered. Fine for light use, worth
+  addressing before running many active rooms at once.
+- **Active-hours throttling** — replying at 4am just as fast as at 2pm reads as
+  bot-like. Could slow down or skip spontaneous replies during a configured
+  "asleep" window per room/persona.
+- **Spontaneous, unprompted topic-starting** — right now the bot only ever
+  reacts to messages; it never speaks first into a quiet room. Doing this
+  properly needs a timer/scheduler independent of the message-event loop
+  (nothing in the codebase polls on a clock today), not just a bigger
+  cooldown.
+- **Multi-message "burst" splitting review** — `humanize.ts` already splits
+  long replies into a few sentence-sized messages, but this hasn't been
+  tuned/reviewed against how a real person actually paces a run of short
+  messages.
+- **Usage/cost monitoring** — no tracking today of how many LLM calls or
+  tokens each room is costing, so a very active or many-room deployment could
+  run up unexpected spend with no visibility.
 
 ## License
 
