@@ -67,6 +67,7 @@ src/
     login.ts             interactive one-time login script
     setPersona.ts        CLI: set a room-specific persona override
     setAliases.ts         CLI: set room-specific mention aliases/nicknames
+    setGuardrails.ts       CLI: set room-specific hard rules/guardrails
     listRooms.ts          CLI: inspect what the bot remembers per room
     listChannels.ts       CLI: list joined rooms (name + chatId)
     analyzeExport.ts      CLI: analyze an exported chat .txt into a named room profile
@@ -144,6 +145,11 @@ Room settings live in Firestore under `rooms/{channelId}`:
 - `aliases` (string[]) — extra names/nicknames that count as a direct mention in
   this room, on top of `KAKAO_BOT_NAME`.
 - `personaOverride` (string) — replace the default persona prompt for that room.
+- `guardrails` (string) — hard rules injected into every prompt for that room
+  (e.g. topics to avoid, how far dark humor/profanity can go). Kept separate
+  from `personaOverride` so rewriting the persona's tone never accidentally
+  drops the room's rules; there is no global default, each room is fully
+  independent.
 - `summary` (string) — the room's rolling long-term memory, auto-generated.
 - `messagesSinceSummary` (number) — internal counter, resets each time `summary`
   is refreshed.
@@ -209,6 +215,13 @@ npm run set-aliases -- <chatId> 길동,길동이,길동봇
 Sets the room-specific mention aliases (comma-separated, overwrites the full
 list). Useful when people call the bot by a nickname or shortened name instead
 of its full `KAKAO_BOT_NAME`.
+
+```bash
+npm run set-guardrails -- <chatId> "정치·종교 얘기는 피해라. 19금 드립은 절대 하지 마라."
+```
+Sets hard rules for one specific room, independent of its persona. There's no
+global guardrail baked into the bot — every room is configured on its own, so
+one room can be told to keep things tame while another is left wide open.
 
 ## Pre-analyzing a room before the bot joins
 

@@ -5,6 +5,12 @@ export interface RoomConfig {
   personaOverride?: string;
   /** Extra names/nicknames that also count as a direct mention in this room. */
   aliases: string[];
+  /**
+   * Room-specific hard rules injected into every prompt (e.g. topics to avoid,
+   * how far dark humor / profanity can go). Kept separate from personaOverride
+   * so rewriting the persona's tone doesn't accidentally drop the room's rules.
+   */
+  guardrails?: string;
 }
 
 function roomConfigDoc(chatId: string) {
@@ -27,6 +33,7 @@ export async function getRoomConfig(chatId: string): Promise<RoomConfig> {
     aliases: Array.isArray(data.aliases)
       ? data.aliases.filter((a): a is string => typeof a === 'string')
       : [],
+    guardrails: typeof data.guardrails === 'string' ? data.guardrails : undefined,
   };
 }
 

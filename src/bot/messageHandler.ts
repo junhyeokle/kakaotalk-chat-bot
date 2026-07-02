@@ -78,6 +78,7 @@ export async function handleMessage(
     roomConfig.personaOverride,
     memory.summary,
     participants,
+    roomConfig.guardrails,
   );
 
   let reply: string;

@@ -8,8 +8,8 @@ function renderParticipants(participants: Participant[]): string {
 }
 
 /**
- * Builds the LLM context from persona + long-term room memory + recent
- * room history.
+ * Builds the LLM context from persona + long-term room memory + guardrails +
+ * recent room history.
  *
  * History is rendered as user/assistant turns. Because a group chat has many
  * human speakers (not a 1:1 dialogue), each non-bot message is prefixed with
@@ -20,6 +20,7 @@ export function buildPromptContext(
   personaOverride?: string,
   roomSummary?: string,
   participants: Participant[] = [],
+  guardrails?: string,
 ): LlmContext {
   const persona = personaOverride?.trim() ? personaOverride : defaultPersona();
 
@@ -31,8 +32,14 @@ export function buildPromptContext(
     memoryBlocks.push(`[방 참가자들에 대해 기억하고 있는 것]\n${renderParticipants(participants)}`);
   }
 
-  const systemPrompt =
-    memoryBlocks.length > 0 ? `${persona}\n\n${memoryBlocks.join('\n\n')}` : persona;
+  const blocks = [persona, ...memoryBlocks];
+
+  // Guardrails go last: instructions near the end of a prompt tend to carry
+  // the most weight, and these are hard rules that must survive regardless of
+  // how the persona text above is written or rewritten.
+  if (guardrails?.trim()) {
+    blocks.push(`[이 방에서 반드시 지켜야 할 규칙]\n${guardrails.trim()}`);
+  }
 
   const messages: LlmMessage[] = history.map((m) =>
     m.isBot
@@ -40,5 +47,5 @@ export function buildPromptContext(
       : { role: 'user', content: `${m.sender}: ${m.text}` },
   );
 
-  return { systemPrompt, messages };
+  return { systemPrompt: blocks.join('\n\n'), messages };
 }

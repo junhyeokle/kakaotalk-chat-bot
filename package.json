@@ -8,6 +8,7 @@
     "login": "ts-node src/scripts/login.ts",
     "set-persona": "ts-node src/scripts/setPersona.ts",
     "set-aliases": "ts-node src/scripts/setAliases.ts",
+    "set-guardrails": "ts-node src/scripts/setGuardrails.ts",
     "list-rooms": "ts-node src/scripts/listRooms.ts",
     "list-channels": "ts-node src/scripts/listChannels.ts",
     "analyze-export": "ts-node src/scripts/analyzeExport.ts",
