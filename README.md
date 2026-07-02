@@ -64,6 +64,7 @@ src/
     triggerEngine.ts     direct-mention detection (name/@name/alias)
     contextJudge.ts       asks the LLM to pick none/filler/meaningful, and for the reply
     messageContent.ts      turns stickers/photos into loggable placeholder text
+    activityHours.ts        computes whether "now" is within a room's sleep window
     humanize.ts          typing delay w/ jitter + multi-bubble message splitting
     messageHandler.ts    end-to-end incoming-message pipeline
   scripts/
@@ -116,6 +117,9 @@ src/
    | `FILLER_COOLDOWN_MESSAGES` | messages that must pass since the bot last sent a cheap filler reaction (ㅋㅋㅋ, 인정, ...) before it's allowed to consider another one (default `2`) |
    | `FIREBASE_SERVICE_ACCOUNT_PATH` | path to your Firebase service account JSON |
    | `SUMMARY_UPDATE_INTERVAL` | messages per room before the long-term summary is refreshed (default `30`) |
+   | `TIMEZONE` | IANA time zone used to evaluate sleep hours (default `Asia/Seoul`) |
+   | `SLEEP_START_HOUR` / `SLEEP_END_HOUR` | global default sleep window, 0–23 (default `2`–`7`); set both to the same value to disable sleep entirely |
+   | `SLEEP_EXTRA_DELAY_MS` | extra delay added on top of the normal typing delay when replying to a mention during sleep hours (default `90000` = 1.5 min) |
 
 3. Place your Firebase service account JSON at the path in
    `FIREBASE_SERVICE_ACCOUNT_PATH` (default `./firebase-service-account.json`).
@@ -176,6 +180,9 @@ Room settings live in Firestore under `rooms/{channelId}`:
 - `messagesSinceFillerReply` (number) — internal counter, resets only when the
   bot sends a filler reaction; gates the (much shorter) filler cooldown,
   independently of the meaningful-reply one.
+- `sleepStartHour` / `sleepEndHour` (number, 0–23) — per-room override of the
+  sleep window; falls back to `SLEEP_START_HOUR`/`SLEEP_END_HOUR` if unset. Set
+  both to the same value to keep this specific room always awake.
 
 Messages are stored under `rooms/{channelId}/messages` and capped at the 20 most
 recent (this is the short-term window fed to the LLM verbatim). Once
@@ -183,6 +190,28 @@ recent (this is the short-term window fed to the LLM verbatim). Once
 to fold them into `summary` **and** into per-participant profiles — this is what
 lets the bot "remember" things (who's who, running jokes, past events) well beyond
 the 20-message short-term window.
+
+### Sleep hours
+
+Replying at 4am exactly as fast as at 2pm reads as bot-like, so each room has a
+configurable "asleep" window (`src/bot/activityHours.ts`):
+
+- **While asleep, the bot never considers a spontaneous reply or filler
+  reaction** — the cooldown checks are forced to fail regardless of how long
+  it's actually been, so no LLM call happens at all for unprompted messages.
+- **A direct mention still gets a reply** (ignoring one outright would look
+  broken/rude), but only after an extra `SLEEP_EXTRA_DELAY_MS` on top of the
+  normal typing delay — like someone who only glances at their phone
+  occasionally while sleeping instead of replying instantly.
+- The window is evaluated in `TIMEZONE` and wraps past midnight correctly
+  (e.g. `23`–`6` means asleep from 11pm to 6am). Setting `sleepStartHour ===
+  sleepEndHour` (globally via env, or per-room) disables sleep entirely.
+
+```bash
+npm run set-sleep-hours -- <chatId> 1 8
+```
+Overrides the sleep window for one room (1am–8am here). Omit this and a room
+just uses the global `SLEEP_START_HOUR`/`SLEEP_END_HOUR` defaults.
 
 ### Stickers and photos
 
@@ -487,9 +516,6 @@ they aren't lost between sessions:
   provider's RPM/TPM quota, the current code has no retry/backoff; the call
   just fails and that message goes unanswered. Fine for light use, worth
   addressing before running many active rooms at once.
-- **Active-hours throttling** — replying at 4am just as fast as at 2pm reads as
-  bot-like. Could slow down or skip spontaneous replies during a configured
-  "asleep" window per room/persona.
 - **Spontaneous, unprompted topic-starting** — right now the bot only ever
   reacts to messages; it never speaks first into a quiet room. Doing this
   properly needs a timer/scheduler independent of the message-event loop

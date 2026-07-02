@@ -34,6 +34,13 @@ async function main(): Promise<void> {
     console.log(`messagesSinceSummary: ${data.messagesSinceSummary ?? 0}`);
     console.log(`messagesSinceSpontaneousReply: ${data.messagesSinceSpontaneousReply ?? 0}`);
     console.log(`messagesSinceFillerReply: ${data.messagesSinceFillerReply ?? 0}`);
+    console.log(
+      `sleepHours: ${
+        typeof data.sleepStartHour === 'number' && typeof data.sleepEndHour === 'number'
+          ? `${data.sleepStartHour}:00–${data.sleepEndHour}:00`
+          : '(global default)'
+      }`,
+    );
     console.log(`summary: ${data.summary ? data.summary : '(none yet)'}`);
     console.log(`participants (${participants.length}):`);
     for (const p of participants) {

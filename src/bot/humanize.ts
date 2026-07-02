@@ -14,7 +14,7 @@ const MAX_CHUNKS = 5;
 // too, in case the model writes one long line instead of using \n.
 const LONG_LINE_THRESHOLD = 60;
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 

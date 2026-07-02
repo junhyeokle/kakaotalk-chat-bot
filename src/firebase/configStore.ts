@@ -21,6 +21,13 @@ export interface RoomConfig {
    * casual/coarse phrase allowed in one room can never leak into another.
    */
   fillerPhrases?: FillerPhrase[];
+  /**
+   * Per-room override of the sleep window (0-23, in config.timeZone). Both
+   * undefined means fall back to the global SLEEP_START_HOUR/SLEEP_END_HOUR.
+   * Setting both to the same hour disables sleep for this room.
+   */
+  sleepStartHour?: number;
+  sleepEndHour?: number;
 }
 
 function roomConfigDoc(chatId: string) {
@@ -54,6 +61,8 @@ export async function getRoomConfig(chatId: string): Promise<RoomConfig> {
             ['high', 'medium', 'low'].includes((p as FillerPhrase).frequency),
         )
       : undefined,
+    sleepStartHour: typeof data.sleepStartHour === 'number' ? data.sleepStartHour : undefined,
+    sleepEndHour: typeof data.sleepEndHour === 'number' ? data.sleepEndHour : undefined,
   };
 }
 

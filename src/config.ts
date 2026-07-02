@@ -13,6 +13,10 @@ export interface AppConfig {
   fillerCooldownMessages: number;
   firebaseServiceAccountPath: string;
   summaryUpdateInterval: number;
+  timeZone: string;
+  sleepStartHour: number;
+  sleepEndHour: number;
+  sleepExtraDelayMs: number;
 }
 
 function requireEnv(name: string): string {
@@ -28,6 +32,24 @@ function parsePositiveInt(raw: string | undefined, fallback: number, name: strin
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer, got: ${raw}`);
+  }
+  return value;
+}
+
+function parseHour(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > 23) {
+    throw new Error(`${name} must be an integer between 0 and 23, got: ${raw}`);
+  }
+  return value;
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer, got: ${raw}`);
   }
   return value;
 }
@@ -66,6 +88,14 @@ function loadConfig(): AppConfig {
       process.env.SUMMARY_UPDATE_INTERVAL,
       30,
       'SUMMARY_UPDATE_INTERVAL',
+    ),
+    timeZone: process.env.TIMEZONE?.trim() || 'Asia/Seoul',
+    sleepStartHour: parseHour(process.env.SLEEP_START_HOUR, 2, 'SLEEP_START_HOUR'),
+    sleepEndHour: parseHour(process.env.SLEEP_END_HOUR, 7, 'SLEEP_END_HOUR'),
+    sleepExtraDelayMs: parseNonNegativeInt(
+      process.env.SLEEP_EXTRA_DELAY_MS,
+      90000,
+      'SLEEP_EXTRA_DELAY_MS',
     ),
   };
 }

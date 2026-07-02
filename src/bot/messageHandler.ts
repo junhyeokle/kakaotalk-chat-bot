@@ -20,11 +20,12 @@ import { getAllParticipants, saveParticipantProfiles } from '../firebase/partici
 import { extractMessageText } from './messageContent';
 import { detectMention } from './triggerEngine';
 import { judgeAndMaybeReply } from './contextJudge';
+import { isSleepHour } from './activityHours';
 import { buildPromptContext } from '../persona/promptBuilder';
 import { DEFAULT_FILLER_PHRASES } from '../persona/fillerPhrases';
 import { summarizeRoom, resolveParticipantUpdates } from '../persona/summarizer';
 import { getLlmProvider } from '../llm';
-import { sendHumanized } from './humanize';
+import { sendHumanized, sleep } from './humanize';
 
 /**
  * Handles one incoming chat message end to end.
@@ -67,14 +68,24 @@ export async function handleMessage(
 
   const mentioned = detectMention(text, config.kakaoBotName, roomConfig.aliases);
 
+  const sleeping = isSleepHour(
+    new Date(),
+    roomConfig.sleepStartHour ?? config.sleepStartHour,
+    roomConfig.sleepEndHour ?? config.sleepEndHour,
+    config.timeZone,
+  );
+
   // Both cooldowns tick on every message, mention or not.
   const [meaningfulCooldownCount, fillerCooldownCount] = await Promise.all([
     incrementSpontaneousCooldown(chatId),
     incrementFillerCooldown(chatId),
   ]);
 
-  const meaningfulAllowed = meaningfulCooldownCount >= config.spontaneousCooldownMessages;
-  const fillerAllowed = fillerCooldownCount >= config.fillerCooldownMessages;
+  // Asleep: don't even consider jumping in unprompted. A direct mention still
+  // gets a reply below (a real person eventually checks their phone), just a
+  // much slower one.
+  const meaningfulAllowed = !sleeping && meaningfulCooldownCount >= config.spontaneousCooldownMessages;
+  const fillerAllowed = !sleeping && fillerCooldownCount >= config.fillerCooldownMessages;
 
   if (!mentioned && !meaningfulAllowed && !fillerAllowed) return;
 
@@ -111,6 +122,12 @@ export async function handleMessage(
   }
 
   if (!reply) return;
+
+  // Mentioned while asleep: still reply (ignoring a direct mention entirely
+  // would look broken), but with a long extra delay on top of the normal
+  // typing delay, like someone who only glances at their phone occasionally
+  // while asleep rather than replying instantly.
+  if (mentioned && sleeping) await sleep(config.sleepExtraDelayMs);
 
   await sendHumanized(reply, (chunk) => kakao.sendText(channel, chunk));
   if (resetMeaningful) await resetSpontaneousCooldown(chatId);
