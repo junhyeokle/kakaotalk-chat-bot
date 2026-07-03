@@ -1,7 +1,13 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from '@google/generative-ai';
 import { LlmContext, LlmProvider } from './types';
+import { withRetry, isRetryableStatus } from './retry';
+import { config } from '../config';
 
 const MODEL = 'gemini-1.5-flash';
+
+function isRetryableGeminiError(err: unknown): boolean {
+  return err instanceof GoogleGenerativeAIFetchError && isRetryableStatus(err.status);
+}
 
 export class GeminiProvider implements LlmProvider {
   private readonly client: GoogleGenerativeAI;
@@ -33,7 +39,11 @@ export class GeminiProvider implements LlmProvider {
     }
 
     const chat = model.startChat({ history });
-    const result = await chat.sendMessage(last.parts[0].text);
+    const result = await withRetry(
+      () => chat.sendMessage(last.parts[0].text),
+      isRetryableGeminiError,
+      { maxAttempts: config.llmRetryMaxAttempts, baseDelayMs: config.llmRetryBaseDelayMs },
+    );
     return result.response.text().trim();
   }
 }

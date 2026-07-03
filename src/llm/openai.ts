@@ -1,7 +1,13 @@
 import OpenAI from 'openai';
 import { LlmContext, LlmProvider } from './types';
+import { withRetry, isRetryableStatus } from './retry';
+import { config } from '../config';
 
 const MODEL = 'gpt-4o-mini';
+
+function isRetryableOpenAIError(err: unknown): boolean {
+  return err instanceof OpenAI.APIError && isRetryableStatus(err.status);
+}
 
 export class OpenAIProvider implements LlmProvider {
   private readonly client: OpenAI;
@@ -16,10 +22,11 @@ export class OpenAIProvider implements LlmProvider {
       ...context.messages.map((m) => ({ role: m.role, content: m.content })),
     ];
 
-    const completion = await this.client.chat.completions.create({
-      model: MODEL,
-      messages,
-    });
+    const completion = await withRetry(
+      () => this.client.chat.completions.create({ model: MODEL, messages }),
+      isRetryableOpenAIError,
+      { maxAttempts: config.llmRetryMaxAttempts, baseDelayMs: config.llmRetryBaseDelayMs },
+    );
 
     return (completion.choices[0]?.message?.content ?? '').trim();
   }

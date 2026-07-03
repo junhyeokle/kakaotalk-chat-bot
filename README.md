@@ -55,6 +55,7 @@ src/
     openai.ts            OpenAI implementation
     index.ts             factory selecting provider via LLM_PROVIDER
     jsonUtil.ts           tolerant JSON parsing for structured LLM responses
+    retry.ts               exponential-backoff retry for transient (429/5xx) LLM errors
   persona/
     defaultPersona.ts    default persona system prompt
     promptBuilder.ts     persona + room summary + participants + history -> LLM context
@@ -129,6 +130,8 @@ src/
    | `SLEEP_START_HOUR` / `SLEEP_END_HOUR` | global default sleep window, 0–23 (default `2`–`7`); set both to the same value to disable sleep entirely |
    | `SLEEP_EXTRA_DELAY_MS` | extra delay added on top of the normal typing delay when replying to a mention during sleep hours (default `90000` = 1.5 min) |
    | `PHOTO_COOLDOWN_MESSAGES` | messages that must pass since the bot last sent a photo before it's allowed to consider another one (default `20`) |
+   | `LLM_RETRY_MAX_ATTEMPTS` | max attempts (including the first) for an LLM call that fails with a retryable error — 429 rate-limit or 500/503 (default `3`) |
+   | `LLM_RETRY_BASE_DELAY_MS` | base delay before the first retry, doubling each attempt (default `1000`; so attempt 2 waits ~1s, attempt 3 waits ~2s) |
 
 3. Place your Firebase service account JSON at the path in
    `FIREBASE_SERVICE_ACCOUNT_PATH` (default `./firebase-service-account.json`).
@@ -549,6 +552,24 @@ Notes:
 - If the VPS's outbound IP changes (e.g. you rebuild the instance), KakaoTalk
   may treat it as a new device and require passcode verification again.
 
+## Handling LLM rate limits
+
+Gemini and OpenAI both cap requests per minute (and tokens per minute) per API
+key. Every LLM call the bot makes — replies, the none/filler/meaningful/photo
+judgment, and long-term summarization — shares that one key, so a burst of
+activity across several active rooms can exceed a low-tier quota.
+
+When that happens, both providers return a `429` (rate-limited) response — or
+occasionally a `500`/`503` (transiently unavailable). `src/llm/retry.ts` wraps
+every provider call (`gemini.ts`, `openai.ts`) to retry those specific
+statuses with exponential backoff (`LLM_RETRY_BASE_DELAY_MS`, doubling each
+attempt, up to `LLM_RETRY_MAX_ATTEMPTS`), while any other kind of error (bad
+API key, malformed request, network failure) still fails immediately — no
+point retrying something that isn't transient. If every retry is exhausted,
+the call still fails and that one message goes unanswered (logged to the
+console via the `.catch()` in `src/index.ts`); this only helps with short-lived
+quota spikes, not a sustained overload of the account's quota tier.
+
 ## A note on `node-kakao`'s API
 
 `node-kakao` is unofficial and its exported class/method names have shifted across
@@ -570,10 +591,6 @@ they aren't lost between sessions:
   node-kakao) and passing it through a multimodal call, which means extending
   `LlmContext`/`LlmProvider` and both `gemini.ts`/`openai.ts` to carry image
   content — a real scope increase over the current text-only `generateReply`.
-- **Rate-limit / retry handling** — if multiple active rooms exhaust the LLM
-  provider's RPM/TPM quota, the current code has no retry/backoff; the call
-  just fails and that message goes unanswered. Fine for light use, worth
-  addressing before running many active rooms at once.
 - **Spontaneous, unprompted topic-starting** — right now the bot only ever
   reacts to messages; it never speaks first into a quiet room. Doing this
   properly needs a timer/scheduler independent of the message-event loop

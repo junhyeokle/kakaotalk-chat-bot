@@ -19,6 +19,8 @@ export interface AppConfig {
   sleepEndHour: number;
   sleepExtraDelayMs: number;
   photoCooldownMessages: number;
+  llmRetryMaxAttempts: number;
+  llmRetryBaseDelayMs: number;
 }
 
 function requireEnv(name: string): string {
@@ -106,6 +108,16 @@ function loadConfig(): AppConfig {
       process.env.PHOTO_COOLDOWN_MESSAGES,
       20,
       'PHOTO_COOLDOWN_MESSAGES',
+    ),
+    llmRetryMaxAttempts: parsePositiveInt(
+      process.env.LLM_RETRY_MAX_ATTEMPTS,
+      3,
+      'LLM_RETRY_MAX_ATTEMPTS',
+    ),
+    llmRetryBaseDelayMs: parsePositiveInt(
+      process.env.LLM_RETRY_BASE_DELAY_MS,
+      1000,
+      'LLM_RETRY_BASE_DELAY_MS',
     ),
   };
 }
